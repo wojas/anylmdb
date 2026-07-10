@@ -34,7 +34,7 @@ static const char *at_scratch;
 
 /* Returns a fresh subdirectory of the scratch dir. Rotates through static
  * buffers so several results can be held at once. */
-static const char *
+static inline const char *
 at_dir(const char *name)
 {
     static char bufs[16][1024];
@@ -45,7 +45,7 @@ at_dir(const char *name)
     return buf;
 }
 
-static void
+static inline void
 at_init(int argc, char **argv)
 {
     if (argc < 2) {
@@ -55,9 +55,9 @@ at_init(int argc, char **argv)
     at_scratch = argv[1];
 }
 
-/* Engine parametrization helper: 9 or 10 from ANYTEST_VER, default both
- * handled by the caller running the body twice. */
-static MDB_env *
+/* Create and open an env in one call; ANYLMDB_VER_DEFAULT leaves the
+ * format choice to anylmdb's defaults. */
+static inline MDB_env *
 at_env_open(const char *dir, anylmdb_ver ver, unsigned flags, size_t mapsize)
 {
     MDB_env *env;

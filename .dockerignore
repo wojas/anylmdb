@@ -1,0 +1,7 @@
+.git
+*.o
+*.a
+*.so
+*.so.*
+*.dylib
+tests/build

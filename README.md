@@ -30,6 +30,13 @@ make dropin     # additionally: liblmdb.so.0 / liblmdb.so.1 (see below)
 make install    # PREFIX=/usr/local
 ```
 
+CI-style container runs (Debian/glibc with ASan, Alpine/musl, plus the
+Linux drop-in check):
+
+```sh
+make docker-test
+```
+
 64-bit POSIX only (Linux, macOS). `MDB_VL32` is not supported (`#error`).
 
 Link with `-lanylmdb` and include the shipped `lmdb.h` (the pristine LMDB

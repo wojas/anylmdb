@@ -120,6 +120,31 @@ test-asan:
 	$(MAKE) test CFLAGS="-O1 -g -fsanitize=address" TESTCFLAGS="-fsanitize=address"
 	$(MAKE) clean
 
+# Drop-in check: a plain-lmdb client linked against the liblmdb.so.1-soname
+# build must load anylmdb and work. Linux-only (soname/rpath semantics).
+ifeq ($(UNAME_S),Darwin)
+test-dropin:
+	@echo "test-dropin: skipped on macOS (Linux-only drop-in check)"
+else
+test-dropin: liblmdb.so.1
+	@mkdir -p tests/build
+	$(CC) $(CFLAGS) $(WARN) -pthread -I. -o tests/build/test_dropin \
+		tests/test_dropin.c ./liblmdb.so.1
+	@tmp=$$(mktemp -d); \
+	if LD_LIBRARY_PATH=. ./tests/build/test_dropin "$$tmp"; then \
+	    echo "PASS test_dropin"; rc=0; \
+	else \
+	    echo "FAIL test_dropin"; rc=1; \
+	fi; \
+	rm -rf "$$tmp"; exit $$rc
+endif
+
+# Run the full suite in Linux containers (Debian glibc + Alpine musl).
+docker-test:
+	docker build -f docker/debian.Dockerfile -t anylmdb-test-debian .
+	docker build -f docker/alpine.Dockerfile -t anylmdb-test-alpine .
+	@echo "docker-test: OK (debian + alpine)"
+
 vendor-list:
 	@printf '%s\n' $(VENDOR_FILES)
 
@@ -131,4 +156,5 @@ install: all
 clean:
 	rm -rf *.o *.a *.so *.so.* *.dylib tests/build .exports.actual
 
-.PHONY: all dropin check-symbols expected-symbols test test-asan vendor-list install clean
+.PHONY: all dropin check-symbols expected-symbols test test-asan test-dropin \
+        docker-test vendor-list install clean

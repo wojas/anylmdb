@@ -17,6 +17,7 @@ VENDOR_FILES = lmdb.h midl.h anylmdb.h anylmdb_ops.h anylmdb_int.h \
        anylmdb_rename09.h anylmdb_rename10.h \
        lmdb_lmdb09.h midl_lmdb09.h lmdb_lmdb10.h midl_lmdb10.h \
        mdb_lmdb09.c.h midl_lmdb09.c.h mdb_lmdb10.c.h midl_lmdb10.c.h \
+       mdb_lmdb10_win.c.h \
        anylmdb_mdb09.c anylmdb_midl09.c anylmdb_mdb10.c anylmdb_midl10.c \
        anylmdb_glue09.c anylmdb_glue10.c anylmdb_core.c anylmdb_sniff.c \
        LICENSE LICENSE.lmdb09 COPYRIGHT.lmdb09 LICENSE.lmdb10 COPYRIGHT.lmdb10

@@ -53,8 +53,8 @@ go mod tidy >/dev/null 2>&1
 go mod vendor
 
 got=$(ls vendor/example.com/anylmdbgo/anylmdb/ | grep -c '\.c\.h$' || true)
-if [ "$got" != 4 ]; then
-    echo "FAIL: expected 4 vendored .c.h files, got $got" >&2
+if [ "$got" != 5 ]; then
+    echo "FAIL: expected 5 vendored .c.h files, got $got" >&2
     exit 1
 fi
 

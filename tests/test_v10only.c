@@ -25,10 +25,11 @@ main(int argc, char **argv)
     MDB_txn *txn;
     unsigned flags;
 
+    mdb_filehandle_t nofd = (mdb_filehandle_t)-1; /* never reaches the engine */
     CHECK_RC(mdb_env_rollback(env, 1), ENOTSUP);
     CHECK_RC(mdb_env_incr_dump(env, "/nonexistent", 1), ENOTSUP);
-    CHECK_RC(mdb_env_incr_dumpfd(env, 1, 1), ENOTSUP);
-    CHECK_RC(mdb_env_incr_loadfd(env, 1), ENOTSUP);
+    CHECK_RC(mdb_env_incr_dumpfd(env, nofd, 1), ENOTSUP);
+    CHECK_RC(mdb_env_incr_loadfd(env, nofd), ENOTSUP);
     CHECK_RC(mdb_env_set_pagesize(env, 8192), ENOTSUP); /* post-open path */
 
     CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));

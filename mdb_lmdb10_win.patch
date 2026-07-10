@@ -1,0 +1,82 @@
+--- mdb_lmdb10.c.h	2026-07-10 16:07:38.824192664 +0800
++++ mdb_lmdb10_win.c.h	2026-07-10 18:54:20.364946402 +0800
+@@ -11614,7 +11614,7 @@
+ #endif
+ #if MDB_RPAGE_CACHE
+ #ifdef _WIN32
+-	LARGE_INTEGER	off = 0;
++	LARGE_INTEGER	off = {.QuadPart = 0};
+ #else
+ 	off_t	off = 0;
+ #endif
+@@ -11678,7 +11678,11 @@
+ 	}
+ #if MDB_RPAGE_CACHE
+ 	if (MDB_REMAPPING(env->me_flags)) {
++#ifdef _WIN32
++		off.QuadPart = wsize;
++#else
+ 		off = wsize;
++#endif
+ 	}
+ #endif
+ 	wsize = w3 - wsize;
+@@ -11686,7 +11690,17 @@
+ 		w2 = (wsize > MAX_WRITE) ? MAX_WRITE : wsize;
+ #if MDB_RPAGE_CACHE
+ 		if (MDB_REMAPPING(env->me_flags)) {
++#ifdef _WIN32
++			void *mapaddr = NULL;
++			SIZE_T maplen = w2;
++			rc = NtMapViewOfSection(env->me_fmh, GetCurrentProcess(),
++				&mapaddr, 0, maplen, &off, &maplen, ViewUnmap,
++				(env->me_flags & MDB_RDONLY) ? 0 : MEM_RESERVE, PAGE_READONLY);
++			if (rc) rc = mdb_nt2win32(rc);
++			ptr = mapaddr;
++#else
+ 			MAP(rc, env, ptr, w2, off);
++#endif
+ 		}
+ #endif
+ 		DO_WRITE(rc, fd, ptr, w2, len);
+@@ -11704,7 +11718,11 @@
+ 			wsize -= len;
+ #if MDB_RPAGE_CACHE
+ 			if (MDB_REMAPPING(env->me_flags)) {
++#ifdef _WIN32
++				off.QuadPart += len;
++#else
+ 				off += len;
++#endif
+ 			}
+ #endif
+ 			continue;
+@@ -11946,7 +11964,8 @@
+ 		return ENOMEM;
+ 
+ #ifdef _WIN32
+-		SetFilePointerEx(env->me_fd, 0, NULL, FILE_BEGIN);
++		off.QuadPart = 0;
++		SetFilePointerEx(env->me_fd, off, NULL, FILE_BEGIN);
+ #else
+ 		lseek(env->me_fd, 0, SEEK_SET);
+ #endif
+@@ -12011,12 +12030,17 @@
+ 			ptr += rlen;
+ 			rsize -= rlen;
+ 		}
++#ifdef _WIN32
++		off.QuadPart = (pg-prevpg-numprev) * env->me_psize;
++#else
+ 		off = (pg-prevpg-numprev) * env->me_psize;
++#endif
+ 		rsize = numpgs * env->me_psize;
+-		if (off) {
+ #ifdef _WIN32
++		if (off.QuadPart) {
+ 			SetFilePointerEx(env->me_fd, off, NULL, FILE_CURRENT);
+ #else
++		if (off) {
+ 			lseek(env->me_fd, off, SEEK_CUR);
+ #endif
+ 		}

@@ -7,7 +7,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#include <direct.h>
+#define at_mkdir(path) _mkdir(path)
+#else
 #include <sys/stat.h>
+#define at_mkdir(path) mkdir(path, 0755)
+#endif
 
 #include "anylmdb.h"
 
@@ -41,7 +48,7 @@ at_dir(const char *name)
     static int i;
     char *buf = bufs[i++ % 16];
     snprintf(buf, 1024, "%s/%s", at_scratch, name);
-    CHECK(mkdir(buf, 0755) == 0);
+    CHECK(at_mkdir(buf) == 0);
     return buf;
 }
 

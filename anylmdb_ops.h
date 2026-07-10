@@ -21,7 +21,24 @@
 #define ANYLMDB_OPS_H
 
 #include <stddef.h>
+#ifndef _MSC_VER
 #include <sys/types.h>
+#endif
+
+/* Platform typedefs mirroring lmdb.h's mdb_filehandle_t and mdb_mode_t.
+ * This header cannot include lmdb.h, so the conditions must match the
+ * upstream headers exactly: filehandle is HANDLE (void *) under _WIN32,
+ * mode is int under _MSC_VER. */
+#ifdef _WIN32
+typedef void *anylmdb_fd_t;
+#else
+typedef int anylmdb_fd_t;
+#endif
+#ifdef _MSC_VER
+typedef int anylmdb_mode_t;
+#else
+typedef mode_t anylmdb_mode_t;
+#endif
 
 /* Generic carrier for user callbacks (MDB_cmp_func*, MDB_rel_func*,
  * MDB_msg_func*, ...). Glue trampolines cast back to the engine's exact
@@ -35,13 +52,14 @@ extern void anylmdb_dispatch_assert(void *wrapper_env, const char *msg);
 /* Common surface: present in both LMDB 0.9 and 1.0. */
 #define ANYLMDB_OPS_COMMON(X) \
 X(int, env_create, (void **env), ((MDB_env **)env)) \
-X(int, env_open, (void *env, const char *path, unsigned flags, mode_t mode), \
+X(int, env_open, (void *env, const char *path, unsigned flags, anylmdb_mode_t mode), \
     ((MDB_env *)env, path, flags, mode)) \
 X(int, env_copy, (void *env, const char *path), ((MDB_env *)env, path)) \
 X(int, env_copy2, (void *env, const char *path, unsigned flags), \
     ((MDB_env *)env, path, flags)) \
-X(int, env_copyfd, (void *env, int fd), ((MDB_env *)env, fd)) \
-X(int, env_copyfd2, (void *env, int fd, unsigned flags), ((MDB_env *)env, fd, flags)) \
+X(int, env_copyfd, (void *env, anylmdb_fd_t fd), ((MDB_env *)env, fd)) \
+X(int, env_copyfd2, (void *env, anylmdb_fd_t fd, unsigned flags), \
+    ((MDB_env *)env, fd, flags)) \
 X(int, env_stat, (void *env, void *stat), ((MDB_env *)env, (MDB_stat *)stat)) \
 X(int, env_info, (void *env, void *info), ((MDB_env *)env, (MDB_envinfo *)info)) \
 X(int, env_sync, (void *env, int force), ((MDB_env *)env, force)) \
@@ -49,7 +67,7 @@ X(int, env_set_flags, (void *env, unsigned flags, int onoff), \
     ((MDB_env *)env, flags, onoff)) \
 X(int, env_get_flags, (void *env, unsigned *flags), ((MDB_env *)env, flags)) \
 X(int, env_get_path, (void *env, const char **path), ((MDB_env *)env, path)) \
-X(int, env_get_fd, (void *env, int *fd), ((MDB_env *)env, fd)) \
+X(int, env_get_fd, (void *env, anylmdb_fd_t *fd), ((MDB_env *)env, fd)) \
 X(int, env_set_mapsize, (void *env, size_t size), ((MDB_env *)env, size)) \
 X(int, env_set_maxreaders, (void *env, unsigned readers), ((MDB_env *)env, readers)) \
 X(int, env_get_maxreaders, (void *env, unsigned *readers), ((MDB_env *)env, readers)) \
@@ -126,8 +144,9 @@ X(int, txn_prepare, (void *txn), ((MDB_txn *)txn)) \
 X(int, env_rollback, (void *env, size_t txnid), ((MDB_env *)env, txnid)) \
 X(int, env_incr_dump, (void *env, const char *path, size_t txnid), \
     ((MDB_env *)env, path, txnid)) \
-X(int, env_incr_dumpfd, (void *env, int fd, size_t txnid), ((MDB_env *)env, fd, txnid)) \
-X(int, env_incr_loadfd, (void *env, int fd), ((MDB_env *)env, fd)) \
+X(int, env_incr_dumpfd, (void *env, anylmdb_fd_t fd, size_t txnid), \
+    ((MDB_env *)env, fd, txnid)) \
+X(int, env_incr_loadfd, (void *env, anylmdb_fd_t fd), ((MDB_env *)env, fd)) \
 X(int, cursor_is_db, (void *cursor), ((MDB_cursor *)cursor))
 
 typedef struct anylmdb_ops {

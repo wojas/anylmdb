@@ -1,17 +1,28 @@
 /* Sniffer: real files in both layouts, NOSUBDIR, hand-crafted unsupported
  * and garbage files, empty/new cases. */
 #include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#else
 #include <unistd.h>
+#endif
 
 #include "anytest.h"
 
 static void
 write_file(const char *path, const unsigned char *buf, size_t len)
 {
+#ifdef _WIN32
+    int fd = _open(path, _O_CREAT | _O_WRONLY | _O_TRUNC | _O_BINARY, 0644);
+    CHECK(fd >= 0);
+    CHECK(_write(fd, buf, (unsigned)len) == (int)len);
+    _close(fd);
+#else
     int fd = open(path, O_CREAT | O_WRONLY | O_TRUNC, 0644);
     CHECK(fd >= 0);
     CHECK(write(fd, buf, len) == (ssize_t)len);
     close(fd);
+#endif
 }
 
 static void

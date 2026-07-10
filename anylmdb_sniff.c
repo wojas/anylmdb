@@ -2,19 +2,27 @@
  *
  * The sniffer reads the data file's first meta page directly and never
  * opens an environment: letting the wrong engine attempt the open is not
- * safe (a failed LMDB 1.0 open can rewrite the lock file before it notices
- * the data-format mismatch).
+ * safe (an LMDB open stamps the lock file with its own lock-format version
+ * before it ever reads the data file, so a failed probe can break or race
+ * concurrent opens by the right engine).
  */
 #include <errno.h>
-#include <fcntl.h>
-#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "anylmdb_int.h"
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#define ANYLMDB_DATANAME "\\data.mdb" /* upstream DATANAME on Windows */
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#define ANYLMDB_DATANAME "/data.mdb"
+#endif
 
 /* Meta page layout facts (see mdb.c of both streams):
  * both formats start the MDB_meta (mm_magic, mm_version, ...) right after
@@ -24,7 +32,20 @@
  * lmdb-js prerelease snapshots and is compatible with neither. */
 #define ANYLMDB_MAGIC 0xBEEFC0DEu
 
+/*
+ * Process-wide default version. MSVC's C mode has no <stdatomic.h>;
+ * Interlocked ops provide the equivalent there.
+ */
+#ifdef _MSC_VER
+static volatile LONG anylmdb_default_ver;
+#define ANYLMDB_DEFAULT_STORE(v) InterlockedExchange(&anylmdb_default_ver, (LONG)(v))
+#define ANYLMDB_DEFAULT_LOAD() InterlockedCompareExchange(&anylmdb_default_ver, 0, 0)
+#else
+#include <stdatomic.h>
 static atomic_int anylmdb_default_ver;
+#define ANYLMDB_DEFAULT_STORE(v) atomic_store(&anylmdb_default_ver, (int)(v))
+#define ANYLMDB_DEFAULT_LOAD() atomic_load(&anylmdb_default_ver)
+#endif
 
 int
 anylmdb_set_default_version(anylmdb_ver ver)
@@ -33,7 +54,7 @@ anylmdb_set_default_version(anylmdb_ver ver)
     case ANYLMDB_VER_DEFAULT:
     case ANYLMDB_VER_09:
     case ANYLMDB_VER_10:
-        atomic_store(&anylmdb_default_ver, (int)ver);
+        ANYLMDB_DEFAULT_STORE(ver);
         return MDB_SUCCESS;
     default:
         return EINVAL;
@@ -43,7 +64,7 @@ anylmdb_set_default_version(anylmdb_ver ver)
 int
 anylmdb__default_version(void)
 {
-    int v = atomic_load(&anylmdb_default_ver);
+    int v = (int)ANYLMDB_DEFAULT_LOAD();
     if (v == ANYLMDB_VER_09 || v == ANYLMDB_VER_10)
         return v;
     const char *e = getenv("ANYLMDB_DEFAULT");
@@ -81,6 +102,74 @@ anylmdb_env_get_version(MDB_env *env, anylmdb_ver *ver)
     return MDB_SUCCESS;
 }
 
+/*
+ * Read the head of the data file. Returns 0 with either *absent set (file
+ * does not exist) or *nread set; otherwise an error code in the platform's
+ * LMDB convention (errno on POSIX, GetLastError() on Windows — the same
+ * codes the engines return from failed opens, so mdb_strerror covers them).
+ */
+#ifdef _WIN32
+
+static int
+anylmdb__read_head(const char *path, unsigned char *buf, unsigned len,
+    long *nread, int *absent)
+{
+    /* UTF-8 path, converted like the engines do (mdb.c utf8_to_utf16). */
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
+    if (wlen <= 0)
+        return EINVAL;
+    WCHAR *wpath = malloc(sizeof(WCHAR) * (size_t)wlen);
+    if (!wpath)
+        return ENOMEM;
+    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, wlen);
+
+    HANDLE h = CreateFileW(wpath, GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    free(wpath);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND) {
+            *absent = 1;
+            return MDB_SUCCESS;
+        }
+        return (int)err;
+    }
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, buf, len, &got, NULL);
+    DWORD err = ok ? 0 : GetLastError();
+    CloseHandle(h);
+    if (!ok)
+        return (int)err;
+    *nread = (long)got;
+    return MDB_SUCCESS;
+}
+
+#else /* POSIX */
+
+static int
+anylmdb__read_head(const char *path, unsigned char *buf, unsigned len,
+    long *nread, int *absent)
+{
+    int fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        if (errno == ENOENT) {
+            *absent = 1;
+            return MDB_SUCCESS;
+        }
+        return errno;
+    }
+    ssize_t n = pread(fd, buf, len, 0);
+    int serrno = errno;
+    close(fd);
+    if (n < 0)
+        return serrno;
+    *nread = (long)n;
+    return MDB_SUCCESS;
+}
+
+#endif /* _WIN32 */
+
 static uint32_t
 get32(const unsigned char *p)
 {
@@ -95,38 +184,28 @@ anylmdb_sniff(const char *path, unsigned int flags, anylmdb_ver *ver)
     if (!path || !ver)
         return EINVAL;
 
-    char *datafile;
-    if (flags & MDB_NOSUBDIR) {
-        datafile = strdup(path);
-    } else {
-        size_t n = strlen(path) + sizeof "/data.mdb";
-        datafile = malloc(n);
-        if (datafile)
-            snprintf(datafile, n, "%s/data.mdb", path);
-    }
-    if (!datafile)
-        return ENOMEM;
-
-    int fd = open(datafile, O_RDONLY | O_CLOEXEC);
-    free(datafile);
-    if (fd < 0) {
-        if (errno == ENOENT) {
-            *ver = ANYLMDB_VER_NEW;
-            return MDB_SUCCESS;
-        }
-        return errno;
-    }
-
     unsigned char buf[32];
-    ssize_t n = pread(fd, buf, sizeof buf, 0);
-    int serrno = errno;
-    close(fd);
-    if (n == 0) {
+    long n = 0;
+    int absent = 0;
+    int rc;
+
+    if (flags & MDB_NOSUBDIR) {
+        rc = anylmdb__read_head(path, buf, sizeof buf, &n, &absent);
+    } else {
+        size_t plen = strlen(path) + sizeof ANYLMDB_DATANAME;
+        char *datafile = malloc(plen);
+        if (!datafile)
+            return ENOMEM;
+        snprintf(datafile, plen, "%s" ANYLMDB_DATANAME, path);
+        rc = anylmdb__read_head(datafile, buf, sizeof buf, &n, &absent);
+        free(datafile);
+    }
+    if (rc)
+        return rc;
+    if (absent || n == 0) {
         *ver = ANYLMDB_VER_NEW;
         return MDB_SUCCESS;
     }
-    if (n < 0)
-        return serrno;
     if ((size_t)n < sizeof buf)
         return MDB_INVALID;
 

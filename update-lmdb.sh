@@ -68,6 +68,11 @@ done
 echo "Regenerating anylmdb_rename${stream}.h"
 scripts/gen-rename.sh "$stream"
 
+if [ "$stream" = 10 ]; then
+    echo "Regenerating mdb_lmdb10_win.c.h (Windows compile fixes)"
+    scripts/gen-win10.sh
+fi
+
 # Record the update, replacing any previous entry for this stream.
 date=$(date -u +%Y-%m-%d)
 tmpv="$tmp/VERSIONS"

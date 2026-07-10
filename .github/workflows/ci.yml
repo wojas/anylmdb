@@ -40,6 +40,16 @@ jobs:
       - name: Drop-in smoke test
         run: make test-dropin
 
+  windows:
+    name: Windows (MSVC, x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Build and test with cl
+        shell: pwsh
+        run: scripts/msvc-build.ps1
+
   go-vendor:
     name: Go vendorability
     runs-on: ubuntu-latest

@@ -47,6 +47,11 @@ for extra in "" "-DMDB_RPAGE_CACHE=1"; do
         | sed -e 's/^_//' -e '/^$/d' >> "$syms"
 done
 
+# Extern symbols that exist only in _WIN32 builds of the engines: nm on the
+# POSIX-built objects above cannot see them. mdb_tls_cbp is the TLS-callback
+# anchor both engines place in .CRT$XLB (see mdb_tls_callback in mdb.c).
+printf 'mdb_tls_cbp\n' >> "$syms"
+
 sort -u "$syms" > "$syms.nm"
 
 # Names declared in the pristine headers (may include declared-but-not-

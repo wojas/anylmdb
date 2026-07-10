@@ -8,16 +8,34 @@
  * read-only cursor after its transaction ended (see README).
  */
 #include <errno.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 #include "anylmdb_int.h"
 
 /*
  * Globals
  */
+
+#if defined(_WIN32) && defined(_MSC_VER)
+/* Both engines emit #pragma comment(linker, "/INCLUDE:mdb_tls_cbp") on
+ * 64-bit MSVC. Pragmas are strings, so the symbol rename cannot rewrite
+ * them and the linker still demands the unrenamed name. Satisfy it here,
+ * referencing the renamed per-engine TLS-callback anchors so they keep
+ * surviving optimization exactly as upstream intended. */
+extern const PIMAGE_TLS_CALLBACK mdb09_tls_cbp, mdb10_tls_cbp;
+const PIMAGE_TLS_CALLBACK *const mdb_tls_cbp[] = {
+    &mdb09_tls_cbp, &mdb10_tls_cbp
+};
+#endif
 
 static char anylmdb_version_str[192];
 
@@ -30,17 +48,36 @@ anylmdb_version_init(void)
         anylmdb_ops09.version(NULL, NULL, NULL));
 }
 
+#ifdef _WIN32
+static BOOL CALLBACK
+anylmdb_version_init_cb(PINIT_ONCE once, PVOID param, PVOID *ctx)
+{
+    (void)once; (void)param; (void)ctx;
+    anylmdb_version_init();
+    return TRUE;
+}
+#endif
+
 char *
 mdb_version(int *major, int *minor, int *patch)
 {
     /* Numeric identity is the shipped (1.0) header's: code that gates 1.0
      * workarounds on major >= 1 degrades safely on 0.9 environments,
      * whereas reporting 0.9 against a 1.0 engine could let it crash. */
-    static pthread_once_t once = PTHREAD_ONCE_INIT;
     if (major) *major = MDB_VERSION_MAJOR;
     if (minor) *minor = MDB_VERSION_MINOR;
     if (patch) *patch = MDB_VERSION_PATCH;
-    pthread_once(&once, anylmdb_version_init);
+#ifdef _WIN32
+    {
+        static INIT_ONCE once = INIT_ONCE_STATIC_INIT;
+        InitOnceExecuteOnce(&once, anylmdb_version_init_cb, NULL, NULL);
+    }
+#else
+    {
+        static pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_once(&once, anylmdb_version_init);
+    }
+#endif
     return anylmdb_version_str;
 }
 

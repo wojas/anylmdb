@@ -1,5 +1,14 @@
 --- mdb_lmdb10.c.h	2026-07-10 16:07:38.824192664 +0800
-+++ mdb_lmdb10_win.c.h	2026-07-10 18:54:20.364946402 +0800
++++ mdb_lmdb10_win.c.h	2026-07-10 19:06:05.653131852 +0800
+@@ -7213,7 +7213,7 @@
+ #endif
+ 	*ret = p;
+ 	if (enc && env->me_encfunc) {
+-		*enc = (MDB_page *)(id3.mptr + rem * env->me_psize);
++		*enc = (MDB_page *)((char *)id3.mptr + rem * env->me_psize);
+ 	}
+ 	return rc;
+ }
 @@ -11614,7 +11614,7 @@
  #endif
  #if MDB_RPAGE_CACHE

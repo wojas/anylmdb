@@ -7213,7 +7213,7 @@ ok:
 #endif
 	*ret = p;
 	if (enc && env->me_encfunc) {
-		*enc = (MDB_page *)(id3.mptr + rem * env->me_psize);
+		*enc = (MDB_page *)((char *)id3.mptr + rem * env->me_psize);
 	}
 	return rc;
 }

@@ -506,6 +506,8 @@ mdb_txn_env(MDB_txn *txn)
 mdb_size_t
 mdb_txn_id(MDB_txn *txn)
 {
+    if (!txn) /* upstream returns 0, not a crash */
+        return 0;
     return txn->env->ops->txn_id(txn->real);
 }
 
@@ -531,6 +533,8 @@ mdb_txn_abort(MDB_txn *txn)
 void
 mdb_txn_reset(MDB_txn *txn)
 {
+    if (!txn) /* upstream tolerates NULL */
+        return;
     txn->env->ops->txn_reset(txn->real);
 }
 

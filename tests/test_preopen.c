@@ -64,6 +64,11 @@ main(int argc, char **argv)
     CHECK_OK(mdb_env_get_flags(env, &f2));
     CHECK(f2 == MDB_NOSYNC); /* rejected flag not buffered */
 
+    /* NULL-txn parity: upstream returns 0 / no-ops instead of crashing */
+    CHECK(mdb_txn_id(NULL) == 0);
+    mdb_txn_reset(NULL);
+    mdb_txn_abort(NULL);
+
     /* userctx round-trip, never forwarded */
     int cookie;
     CHECK_OK(mdb_env_set_userctx(env, &cookie));

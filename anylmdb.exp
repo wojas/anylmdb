@@ -1,0 +1,4 @@
+# macOS exported-symbols list (note the Mach-O underscore prefix).
+# _mdb_* does not match the renamed engine internals (_mdb09_*, _mdb10_*).
+_mdb_*
+_anylmdb_*

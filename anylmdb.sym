@@ -1,0 +1,10 @@
+/* Linux linker version script: export only the public API. The glob
+ * mdb_* does not match the renamed engine internals (mdb09_*, mdb10_*),
+ * which stay local in shared builds. */
+{
+    global:
+        mdb_*;
+        anylmdb_*;
+    local:
+        *;
+};

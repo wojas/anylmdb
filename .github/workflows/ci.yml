@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    name: Linux (glibc, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: make test
+      - name: Drop-in smoke test
+        run: make test-dropin
+      - name: Test with AddressSanitizer
+        run: make test-asan
+
+  macos:
+    name: macOS (arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: make test
+      - name: Test with AddressSanitizer
+        run: make test-asan
+
+  alpine:
+    name: Alpine (musl)
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: apk add --no-cache build-base
+      - name: Test
+        run: make test
+      - name: Drop-in smoke test
+        run: make test-dropin
+
+  go-vendor:
+    name: Go vendorability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - name: Vendored consumer builds and runs
+        run: scripts/check-go-vendor.sh

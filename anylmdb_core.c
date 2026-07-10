@@ -3,9 +3,11 @@
  * Every handle the application sees is a small wrapper: MDB_env carries the
  * engine dispatch table (chosen at mdb_env_open by sniffing the data file)
  * plus settings buffered before open; MDB_txn and MDB_cursor are thin
- * shells around the engine's own handles. All txn/cursor semantics are pure
- * passthrough — including LMDB 1.0's undefined behavior when closing a
- * read-only cursor after its transaction ended (see README).
+ * shells around the engine's own handles. Txn/cursor semantics are pure
+ * passthrough with one exception: when a read-only txn ends, the engine
+ * cursors are closed early so that the documented close/renew-after-txn-end
+ * contract keeps working on the 1.0 engine (see anylmdb_txn_detach_cursors
+ * and README).
  */
 #include <errno.h>
 #include <pthread.h>
@@ -462,12 +464,38 @@ mdb_env_incr_loadfd(MDB_env *env, mdb_filehandle_t fd)
  */
 
 static void
+anylmdb_txn_detach_cursors(MDB_txn *txn)
+{
+    /* This read-only txn is about to end. Both LMDB versions document that
+     * its cursors may still be closed (or renewed) afterwards, but LMDB
+     * 1.0.0's mdb_cursor_close reads the freed txn (use-after-free under
+     * the default MDB_RPAGE_CACHE, and the documented MDB_RPAGE_CACHE=0
+     * opt-out does not compile). Keep the documented contract working on
+     * both engines: close the engine cursors now, while the txn is still
+     * live, and leave the app-facing shells alive. mdb_cursor_close on a
+     * detached shell just frees it; mdb_cursor_renew re-creates an engine
+     * cursor on the new txn (identical semantics — renew rebinds the
+     * cursor and resets its position either way). */
+    MDB_cursor *c = txn->cursors, *next;
+    for (; c; c = next) {
+        next = c->next;
+        c->ops->cursor_close(c->real);
+        c->real = NULL;
+        c->txn = NULL;
+        c->next = NULL;
+        c->on_list = 0;
+    }
+    txn->cursors = NULL;
+}
+
+static void
 anylmdb_txn_free(MDB_txn *txn)
 {
-    /* The engine already closed this write txn's cursors; only our shells
-     * remain. (Read-only txns never track cursors: their shells are freed
-     * by mdb_cursor_close, whenever the app calls it.) */
-    MDB_cursor *c = txn->wcursors, *next;
+    /* Write txn: the engine already closed the real cursors at commit/
+     * abort; only our shells remain, and upstream forbids touching a
+     * write-txn cursor afterwards. (For read-only txns the list was
+     * emptied by anylmdb_txn_detach_cursors.) */
+    MDB_cursor *c = txn->cursors, *next;
     for (; c; c = next) {
         next = c->next;
         free(c);
@@ -516,6 +544,8 @@ mdb_txn_commit(MDB_txn *txn)
 {
     if (!txn)
         return EINVAL;
+    if (txn->rdonly)
+        anylmdb_txn_detach_cursors(txn);
     int rc = txn->env->ops->txn_commit(txn->real);
     anylmdb_txn_free(txn); /* upstream frees the txn even when commit fails */
     return rc;
@@ -526,6 +556,8 @@ mdb_txn_abort(MDB_txn *txn)
 {
     if (!txn)
         return;
+    if (txn->rdonly)
+        anylmdb_txn_detach_cursors(txn);
     txn->env->ops->txn_abort(txn->real);
     anylmdb_txn_free(txn);
 }
@@ -697,16 +729,27 @@ mdb_cursor_open(MDB_txn *txn, MDB_dbi dbi, MDB_cursor **ret)
     }
     cursor->ops = txn->env->ops;
     cursor->txn = txn;
-    if (!txn->rdonly) {
-        /* Track the shell so it gets freed when the engine auto-closes the
-         * cursor at txn end. The write txn is necessarily still live at any
-         * explicit close (upstream contract), so unlinking is always safe. */
-        cursor->next = txn->wcursors;
-        txn->wcursors = cursor;
-        cursor->on_list = 1;
-    }
+    cursor->dbi = dbi;
+    /* Track every shell on its txn: write-txn shells are freed when the
+     * engine auto-closes the cursors at txn end, read-only shells are
+     * detached then (anylmdb_txn_detach_cursors). Unlinking at explicit
+     * close is always safe: on_list implies the txn is still live. */
+    cursor->next = txn->cursors;
+    txn->cursors = cursor;
+    cursor->on_list = 1;
     *ret = cursor;
     return MDB_SUCCESS;
+}
+
+static void
+anylmdb_cursor_unlink(MDB_cursor *cursor)
+{
+    MDB_cursor **prev = &cursor->txn->cursors;
+    while (*prev && *prev != cursor)
+        prev = &(*prev)->next;
+    if (*prev == cursor)
+        *prev = cursor->next;
+    cursor->on_list = 0;
 }
 
 void
@@ -714,17 +757,10 @@ mdb_cursor_close(MDB_cursor *cursor)
 {
     if (!cursor)
         return;
-    /* Pure passthrough: for a read-only cursor whose txn already ended this
-     * is legal on the 0.9 engine and upstream-undefined on 1.0, exactly as
-     * if the app linked that engine directly. */
-    cursor->ops->cursor_close(cursor->real);
-    if (cursor->on_list) {
-        MDB_cursor **prev = &cursor->txn->wcursors;
-        while (*prev && *prev != cursor)
-            prev = &(*prev)->next;
-        if (*prev == cursor)
-            *prev = cursor->next;
-    }
+    if (cursor->real) /* NULL once its read-only txn ended */
+        cursor->ops->cursor_close(cursor->real);
+    if (cursor->on_list)
+        anylmdb_cursor_unlink(cursor);
     free(cursor);
 }
 
@@ -733,10 +769,26 @@ mdb_cursor_renew(MDB_txn *txn, MDB_cursor *cursor)
 {
     if (!txn || !cursor)
         return EINVAL;
-    int rc = txn->env->ops->cursor_renew(txn->real, cursor->real);
-    if (rc == MDB_SUCCESS)
+    int rc;
+    if (cursor->real) {
+        rc = txn->env->ops->cursor_renew(txn->real, cursor->real);
+    } else {
+        /* The engine cursor was closed when its read-only txn ended;
+         * re-create it on the new txn. Same semantics: renew rebinds the
+         * cursor and resets its position either way. */
+        rc = txn->env->ops->cursor_open(txn->real, cursor->dbi, &cursor->real);
+    }
+    if (rc != MDB_SUCCESS)
+        return rc;
+    if (cursor->txn != txn) { /* move the shell to the new txn's list */
+        if (cursor->on_list)
+            anylmdb_cursor_unlink(cursor);
         cursor->txn = txn;
-    return rc;
+        cursor->next = txn->cursors;
+        txn->cursors = cursor;
+        cursor->on_list = 1;
+    }
+    return MDB_SUCCESS;
 }
 
 MDB_txn *

@@ -38,18 +38,24 @@ struct MDB_txn {
     MDB_txn *parent;
     void *real;
     unsigned rdonly:1;
-    struct MDB_cursor *wcursors; /* shells of this WRITE txn's open cursors,
-                                  * freed when the engine auto-closes them at
-                                  * commit/abort; read-only txns don't track */
+    struct MDB_cursor *cursors;  /* shells of this txn's open cursors. Write
+                                  * txn: freed when the engine auto-closes
+                                  * them at commit/abort. Read-only txn:
+                                  * detached at commit/abort (engine cursor
+                                  * closed early, shell stays alive until the
+                                  * app closes or renews it). */
 };
 
 struct MDB_cursor {
     /* ops/real must not be reached through txn: a read-only cursor may
-     * legally be closed after its txn wrapper was freed (0.9 contract). */
+     * legally be closed or renewed after its txn ended (documented 0.9
+     * contract, restored on the 1.0 engine by detaching — see
+     * anylmdb_txn_detach_cursors in anylmdb_core.c). */
     const anylmdb_ops *ops;
-    MDB_txn *txn;
-    void *real;
-    struct MDB_cursor *next; /* wcursors list; write-txn cursors only */
+    MDB_txn *txn;                /* NULL once its read-only txn ended */
+    void *real;                  /* NULL once detached */
+    MDB_dbi dbi;                 /* for the lazy re-create in cursor_renew */
+    struct MDB_cursor *next;
     unsigned on_list:1;
 };
 

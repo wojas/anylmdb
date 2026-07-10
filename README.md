@@ -84,12 +84,16 @@ binary).
   both `LMDB 1.0.0` and `LMDB 0.9.35` as substrings, so a naive
   `grep "LMDB $ver"` version check matches either.
 - **Closing a read-only cursor after its transaction ended** is documented
-  and legal in LMDB 0.9 but is a use-after-free in current LMDB 1.0
-  (`mdb_cursor_close` touches the freed transaction when built with the
-  default `MDB_RPAGE_CACHE`). anylmdb passes this through unchanged: on a
-  0.9 environment it works, on a 1.0 environment it is the same undefined
-  behavior you would get linking 1.0 directly. Portable code should close
-  read-only cursors before ending their transaction.
+  as legal by both LMDB versions, but is a use-after-free in current LMDB
+  1.0 (`mdb_cursor_close` reads the freed transaction when built with the
+  default `MDB_RPAGE_CACHE`, and the documented `MDB_RPAGE_CACHE=0` opt-out
+  does not compile in pristine 1.0.0). anylmdb keeps the documented
+  contract working on both engines: when a read-only transaction ends, the
+  wrapper closes the engine cursors (still legal at that point) while the
+  application-facing handles stay alive — a later `mdb_cursor_close` just
+  frees the handle, and `mdb_cursor_renew` transparently re-creates an
+  engine cursor on the new transaction (same semantics: renew rebinds the
+  cursor and resets its position either way).
 - **No format conversion**: `mdb_env_copy`/`mdb_env_copyfd` write the
   environment's native format. Migrating 0.9 → 1.0 means dump/reload (which
   anylmdb makes possible in a single process: read with one env, write with

@@ -1,8 +1,9 @@
 /* Transaction and cursor-shell semantics on both engines: nested write
  * txns, reset/renew, wrapper identity getters, write-cursor auto-free at
- * commit, read-cursor close before txn end, renew across txns.
- * Closing a read cursor AFTER txn end is exercised on 0.9 only — on 1.0
- * that is upstream-undefined behavior which anylmdb passes through. */
+ * commit, read-cursor close before txn end, renew across txns, and the
+ * documented close/renew-AFTER-txn-end contract, which the wrapper keeps
+ * working on the 1.0 engine by detaching engine cursors at read-txn end
+ * (raw 1.0 has a use-after-free there). */
 #include "anytest.h"
 
 static void
@@ -79,22 +80,43 @@ run(anylmdb_ver want)
     mdb_cursor_close(c2);
     mdb_txn_abort(txn);
 
-    /* renew a cursor into a brand-new read txn */
+    /* documented contract on BOTH engines: a read cursor may outlive its
+     * txn and be closed or renewed afterwards (the wrapper detaches the
+     * engine cursor at txn end and lazily re-creates it on renew) */
     CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
     CHECK_OK(mdb_cursor_open(txn, dbi, &c1));
-    if (want == ANYLMDB_VER_09) {
-        /* 0.9 contract: a read cursor may outlive its txn and be closed or
-         * renewed afterwards. Passthrough must keep this working on 0.9. */
-        mdb_txn_abort(txn);
-        CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
-        CHECK_OK(mdb_cursor_renew(txn, c1));
-        CHECK_OK(mdb_cursor_get(c1, &k, &v, MDB_FIRST));
-        mdb_txn_abort(txn);
-        mdb_cursor_close(c1); /* after txn end: legal on 0.9 */
-    } else {
-        mdb_cursor_close(c1);
-        mdb_txn_abort(txn);
-    }
+    CHECK_OK(mdb_cursor_get(c1, &k, &v, MDB_FIRST));
+    mdb_txn_abort(txn);
+    CHECK(mdb_cursor_txn(c1) == NULL); /* detached */
+    CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
+    CHECK_OK(mdb_cursor_renew(txn, c1));
+    CHECK(mdb_cursor_txn(c1) == txn);
+    CHECK_OK(mdb_cursor_get(c1, &k, &v, MDB_FIRST));
+    mdb_txn_abort(txn);
+    mdb_cursor_close(c1); /* after txn end */
+
+    /* same across a read-txn COMMIT, with one cursor closed while live to
+     * exercise the shell-list unlink, and one left for the app to close
+     * after the txn is long gone */
+    CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
+    CHECK_OK(mdb_cursor_open(txn, dbi, &c1));
+    CHECK_OK(mdb_cursor_open(txn, dbi, &c2));
+    CHECK_OK(mdb_cursor_open(txn, dbi, &c3));
+    mdb_cursor_close(c2);
+    CHECK_OK(mdb_txn_commit(txn));
+    mdb_cursor_close(c3);
+    mdb_cursor_close(c1);
+
+    /* a renewed-then-abandoned cursor: renew moves the shell to the new
+     * txn's list, so ending that txn must detach it again */
+    CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
+    CHECK_OK(mdb_cursor_open(txn, dbi, &c1));
+    mdb_txn_abort(txn);
+    CHECK_OK(mdb_txn_begin(env, NULL, MDB_RDONLY, &txn));
+    CHECK_OK(mdb_cursor_renew(txn, c1));
+    mdb_txn_abort(txn);
+    CHECK(mdb_cursor_txn(c1) == NULL);
+    mdb_cursor_close(c1);
 
     mdb_env_close(env);
 }

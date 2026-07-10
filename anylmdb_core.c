@@ -199,6 +199,14 @@ mdb_env_sync(MDB_env *env, int force)
     return env->ops->env_sync(env->real, force);
 }
 
+/* Runtime-changeable env flags, identical in 0.9.35 and 1.0.0 (CHANGEABLE
+ * in mdb.c). Upstream mdb_env_set_flags rejects anything else immediately,
+ * so buffered pre-open calls must do the same rather than defer the EINVAL
+ * to mdb_env_open. This also keeps pending_flags within the set upstream's
+ * mdb_env_get_flags would expose. */
+#define ANYLMDB_FLAGS_CHANGEABLE \
+    (MDB_NOSYNC|MDB_NOMETASYNC|MDB_MAPASYNC|MDB_NOMEMINIT)
+
 int
 mdb_env_set_flags(MDB_env *env, unsigned int flags, int onoff)
 {
@@ -206,6 +214,8 @@ mdb_env_set_flags(MDB_env *env, unsigned int flags, int onoff)
         return EINVAL;
     if (env->opened)
         return env->ops->env_set_flags(env->real, flags, onoff);
+    if (flags & ~ANYLMDB_FLAGS_CHANGEABLE)
+        return EINVAL;
     if (onoff)
         env->pending_flags |= flags;
     else
@@ -239,9 +249,12 @@ mdb_env_get_path(MDB_env *env, const char **path)
 int
 mdb_env_get_fd(MDB_env *env, mdb_filehandle_t *fd)
 {
-    REQUIRE_OPEN(env);
-    if (!fd)
+    if (!env || !fd)
         return EINVAL;
+    if (!env->opened) {
+        *fd = (mdb_filehandle_t)-1; /* matches upstream: me_fd invalid before open */
+        return MDB_SUCCESS;
+    }
     return env->ops->env_get_fd(env->real, fd);
 }
 
@@ -333,14 +346,23 @@ mdb_env_set_assert(MDB_env *env, MDB_assert_func *func)
 int
 mdb_reader_list(MDB_env *env, MDB_msg_func *func, void *ctx)
 {
-    REQUIRE_OPEN(env);
+    if (!env || !func)
+        return -1; /* upstream returns -1 here, not an errno */
+    if (!env->opened) /* upstream with no lock table yet */
+        return func("(no reader locks)\n", ctx);
     return env->ops->reader_list(env->real, (anylmdb_fnptr)func, ctx);
 }
 
 int
 mdb_reader_check(MDB_env *env, int *dead)
 {
-    REQUIRE_OPEN(env);
+    if (!env)
+        return EINVAL;
+    if (!env->opened) { /* upstream with no lock table yet */
+        if (dead)
+            *dead = 0;
+        return MDB_SUCCESS;
+    }
     return env->ops->reader_check(env->real, dead);
 }
 

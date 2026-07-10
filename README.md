@@ -80,7 +80,9 @@ binary).
   shipped header, so code gating 1.0 workarounds on `major >= 1` stays
   safe), with the string
   `"ANYLMDB x.y.z: LMDB 1.0.0 (...) + LMDB 0.9.35 (...)"`. This is the one
-  deliberate deviation from drop-in behavior.
+  deliberate deviation from drop-in behavior. Note that the string contains
+  both `LMDB 1.0.0` and `LMDB 0.9.35` as substrings, so a naive
+  `grep "LMDB $ver"` version check matches either.
 - **Closing a read-only cursor after its transaction ended** is documented
   and legal in LMDB 0.9 but is a use-after-free in current LMDB 1.0
   (`mdb_cursor_close` touches the freed transaction when built with the
@@ -110,6 +112,11 @@ binary).
 The build is deliberately flat and codegen-free so language bindings can
 compile anylmdb directly — see [VENDORING.md](VENDORING.md). `make
 vendor-list` prints the file set.
+
+When switching a binding from its own vendored LMDB to anylmdb, verify the
+linkage with `nm`/`otool`/`ldd` on the resulting binary: a leftover vendored
+`mdb.c` in the package silently wins over the shared library (every `mdb_*`
+symbol resolves statically) and produces convincing but bogus results.
 
 ## Updating the vendored LMDB versions
 

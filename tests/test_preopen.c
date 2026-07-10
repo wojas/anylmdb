@@ -2,6 +2,14 @@
  * after open; maxkeysize special cases; userctx round-trip. */
 #include "anytest.h"
 
+static int
+count_noreaders_msg(const char *msg, void *ctx)
+{
+    int *n = ctx;
+    (*n)++;
+    return strcmp(msg, "(no reader locks)\n") == 0 ? 0 : -1;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -31,8 +39,30 @@ main(int argc, char **argv)
     const char *path = (const char *)0x1;
     CHECK_OK(mdb_env_get_path(env, &path));
     CHECK(path == NULL);
-    mdb_filehandle_t fd;
-    CHECK_RC(mdb_env_get_fd(env, &fd), EINVAL);
+
+    /* drop-in parity on an unopened env (upstream behavior is identical in
+     * 0.9.35 and 1.0.0): get_fd succeeds and yields the invalid handle;
+     * reader_list/reader_check act as if there is no lock table;
+     * set_flags rejects non-CHANGEABLE flags immediately */
+    mdb_filehandle_t fd = (mdb_filehandle_t)0;
+    CHECK_OK(mdb_env_get_fd(env, &fd));
+    CHECK(fd == (mdb_filehandle_t)-1);
+    int nmsgs = 0;
+    CHECK(mdb_reader_list(NULL, count_noreaders_msg, &nmsgs) == -1);
+    CHECK(mdb_reader_list(env, NULL, &nmsgs) == -1);
+    CHECK(nmsgs == 0);
+    CHECK(mdb_reader_list(env, count_noreaders_msg, &nmsgs) == 0);
+    CHECK(nmsgs == 1);
+    int dead = 99;
+    CHECK_RC(mdb_reader_check(NULL, &dead), EINVAL);
+    CHECK(dead == 99);
+    CHECK_OK(mdb_reader_check(env, &dead));
+    CHECK(dead == 0);
+    CHECK_OK(mdb_reader_check(env, NULL));
+    CHECK_RC(mdb_env_set_flags(env, MDB_RDONLY, 1), EINVAL);
+    unsigned f2 = ~0u;
+    CHECK_OK(mdb_env_get_flags(env, &f2));
+    CHECK(f2 == MDB_NOSYNC); /* rejected flag not buffered */
 
     /* userctx round-trip, never forwarded */
     int cookie;

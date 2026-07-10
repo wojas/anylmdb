@@ -768,9 +768,12 @@ mdb_cursor_is_db(MDB_cursor *cursor)
 }
 
 /*
- * Crypto module helpers (1.0's module.c is not built: no dlopen dependency).
- * mdb_modsetup is reimplemented on top of our own setters, mirroring
- * upstream module.c, so statically linked crypto hooks still work.
+ * Crypto module helpers. 1.0's module.c is not built (no dlopen dependency,
+ * and it is under the Symas dual-use license rather than the OpenLDAP
+ * Public License), so mdb_modload always fails. mdb_modsetup is
+ * reimplemented here from its documented contract in lmdb.h — "just a
+ * wrapper around mdb_env_set_encrypt()" — so statically provided crypto
+ * hooks still work.
  */
 
 void *
@@ -792,20 +795,22 @@ mdb_modunload(void *handle)
 void
 mdb_modsetup(MDB_env *env, MDB_crypto_funcs *cf, const char *password)
 {
-    MDB_val enckey = {0, NULL};
     if (!env || !cf)
         return;
     if (cf->mcf_sumfunc)
         mdb_env_set_checksum(env, cf->mcf_sumfunc, cf->mcf_sumsize);
     if (cf->mcf_encfunc && password) {
-        char keybuf[2048];
-        enckey.mv_data = keybuf;
-        enckey.mv_size = cf->mcf_keysize;
-        if (cf->mcf_str2key)
-            cf->mcf_str2key(password, &enckey);
-        else
-            strncpy(enckey.mv_data, password, enckey.mv_size);
-        mdb_env_set_encrypt(env, cf->mcf_encfunc, &enckey, cf->mcf_esumsize);
-        memset(enckey.mv_data, 0, enckey.mv_size);
+        char keydata[2048];
+        MDB_val key = { (size_t)cf->mcf_keysize, keydata };
+        if (cf->mcf_keysize <= 0 || key.mv_size > sizeof keydata)
+            return;
+        if (cf->mcf_str2key) {
+            cf->mcf_str2key(password, &key);
+        } else {
+            memset(keydata, 0, key.mv_size);
+            strncpy(keydata, password, key.mv_size);
+        }
+        mdb_env_set_encrypt(env, cf->mcf_encfunc, &key, cf->mcf_esumsize);
+        memset(keydata, 0, sizeof keydata);
     }
 }
